@@ -2,7 +2,7 @@
 
 ---
 
-```markdown
+
 # 🚀 macOS Multipass Kubernetes Setup  
 
 An **Ansible playbook** to set up a **Kubernetes cluster on macOS** using **Multipass** for VM management. Ideal for **Mac Mini M4** or any macOS system!  
@@ -22,6 +22,7 @@ Homebrew is the missing package manager for macOS.
 ```sh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
+
 🔗 [Homebrew Website](https://brew.sh/)  
 
 ### 3️⃣ Install **Ansible**  
