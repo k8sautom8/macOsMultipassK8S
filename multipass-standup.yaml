@@ -1,0 +1,378 @@
+---
+- name: Set up Kubernetes cluster using Multipass VMs
+  hosts: localhost
+  gather_facts: no
+  vars:
+    # Define control plane and worker nodes resource configuration
+    vms:
+      master01:
+        memory: 2G
+        cpu: 2
+        disk: 12G
+        network: en1
+      worker01:
+        memory: 4G
+        cpu: 2
+        disk: 12G
+        network: en1
+      worker02:
+        memory: 4G
+        cpu: 2
+        disk: 12G
+        network: en1
+      worker03:
+        memory: 4G
+        cpu: 2
+        disk: 12G
+        network: en1
+
+    # Define the Kubernetes version to be installed
+    k8s_version: "v1.32"
+
+    # Define the list of services to enable and start for each VM
+    services_to_enable:
+      - { node: "master01", service: "kubelet" }
+      - { node: "worker01", service: "kubelet" }
+      - { node: "worker02", service: "kubelet" }
+      - { node: "worker03", service: "kubelet" }
+      - { node: "master01", service: "containerd" }
+      - { node: "worker01", service: "containerd" }
+      - { node: "worker02", service: "containerd" }
+      - { node: "worker03", service: "containerd" }
+
+  tasks:
+    - name: Check if Multipass VMs are installed
+      shell: |
+        multipass list --format json 2>/dev/null || echo '{"list":[]}'
+      register: vm_list
+      changed_when: false
+
+    - name: Bring offline VMs online
+      shell: multipass start {{ item.key }}
+      when: 
+        - item.key in (vm_list.stdout | from_json | json_query('list[*].name'))
+        - item.key in (vm_list.stdout | from_json | json_query('list[?state==`Stopped`].name'))
+      loop: "{{ vms | dict2items }}"
+
+    - name: Create missing VMs
+      shell: multipass launch -n {{ item.key }} -m {{ item.value.memory }} -c {{ item.value.cpu }} -d {{ item.value.disk }} --network {{ item.value.network }}
+      when: "item.key not in (vm_list.stdout | from_json | json_query('list[*].name'))"
+      loop: "{{ vms | dict2items }}"
+
+    - name: Ensure DNS is configured correctly inside VMs
+      ansible.builtin.command: >
+        multipass exec {{ item.key }} -- bash -c 'grep -qxF "nameserver 8.8.8.8" /etc/resolv.conf || echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf'
+      changed_when: false
+      loop: "{{ vms | dict2items }}"
+
+    - name: Wait for internet connectivity
+      ansible.builtin.command: >
+        multipass exec {{ item.key }} -- bash -c 'until ping -c 1 -W 2 8.8.8.8; do sleep 5; done'
+      register: internet_check
+      retries: 10
+      delay: 5
+      changed_when: false
+      failed_when: internet_check.rc != 0
+      loop: "{{ vms | dict2items }}"
+
+    - name: Fail if VM has no internet
+      ansible.builtin.fail:
+        msg: "Internet connectivity is down on {{ item.item.key }}"
+      when: item.rc != 0
+      loop: "{{ internet_check.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    - name: Check if Kubernetes repository is already added
+      ansible.builtin.command: multipass exec {{ vm.key }} -- test -f /etc/apt/sources.list.d/kubernetes.list
+      register: repo_check
+      changed_when: false
+      failed_when: false
+      loop: "{{ vms | dict2items }}"
+      loop_control:
+        loop_var: vm
+
+    - name: Add Kubernetes apt repository (Only if not present)
+      ansible.builtin.command: >
+        multipass exec {{ repo_result.vm.key }} -- bash -c '
+        sudo mkdir -p /etc/apt/keyrings &&
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ k8s_version }}/deb/Release.key |
+        sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg &&
+        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ k8s_version }}/deb/ /" |
+        sudo tee /etc/apt/sources.list.d/kubernetes.list'
+      loop: "{{ repo_check.results }}"
+      loop_control:
+        loop_var: repo_result
+      when: repo_result.rc != 0  # Runs only if repo is missing
+      register: add_repo_result
+      changed_when: add_repo_result.rc == 0
+      no_log: true  # Suppresses excessive output but still logs errors
+
+    - name: Update apt package cache
+      ansible.builtin.command: multipass exec {{ vm.key }} -- sudo apt-get update
+      changed_when: false
+      loop: "{{ vms | dict2items }}"
+      loop_control:
+        loop_var: vm
+
+    - name: Ensure required packages are installed
+      ansible.builtin.command: >
+        multipass exec {{ item.key }} -- bash -c '
+        if ! dpkg-query -W -f="${Status}" kubelet 2>/dev/null | grep -q "install ok installed"; then
+          sudo apt-get update &&
+          sudo apt-get install -y apt-transport-https ca-certificates curl gpg containerd kubelet kubeadm kubectl
+        fi'
+      changed_when: false
+      loop: "{{ vms | dict2items }}"
+
+    - name: Hold Kubernetes packages to prevent unintended upgrades
+      ansible.builtin.command: >
+        multipass exec {{ item.key }} -- bash -c '
+        if ! apt-mark showhold | grep -q "^kubelet$"; then sudo apt-mark hold kubelet kubeadm kubectl; fi'
+      changed_when: false
+      loop: "{{ vms | dict2items }}"
+
+    - name: Ensure required kernel modules are loaded
+      ansible.builtin.command: multipass exec {{ item.0.key }} -- sudo modprobe {{ item.1 }}
+      loop: "{{ vms | dict2items | product(['overlay', 'br_netfilter']) | list }}"
+      loop_control:
+        loop_var: item
+      changed_when: false
+
+    - name: Persist kernel module settings
+      ansible.builtin.command: multipass exec {{ item.key }} -- bash -c 'echo -e "overlay\nbr_netfilter" | sudo tee /etc/modules-load.d/k8s.conf'
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
+
+    - name: Apply Kubernetes sysctl settings
+      ansible.builtin.command: multipass exec {{ item.key }} -- bash -c 'echo -e "net.bridge.bridge-nf-call-iptables=1\nnet.bridge.bridge-nf-call-ip6tables=1\nnet.ipv4.ip_forward=1" | sudo tee /etc/sysctl.d/k8s.conf'
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
+
+    - name: Apply sysctl settings
+      ansible.builtin.command: multipass exec {{ item.key }} -- sudo sysctl --system
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
+
+    - name: Ensure /etc/containerd directory exists
+      ansible.builtin.command: multipass exec {{ item.key }} -- sudo mkdir -p /etc/containerd
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
+
+    - name: Generate default containerd config if missing
+      ansible.builtin.command: multipass exec {{ item.key }} -- sudo sh -c "containerd config default > /etc/containerd/config.toml"
+      loop: "{{ vms | dict2items }}"
+      args:
+        creates: "/etc/containerd/config.toml"
+      changed_when: false
+
+    - name: Enable systemd cgroup driver in containerd
+      ansible.builtin.command: multipass exec {{ item.key }} -- sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
+
+    - name: Restart containerd if config changed
+      ansible.builtin.command: multipass exec {{ item.key }} -- sudo systemctl restart containerd.service
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
+
+#   - name: Enable IPv4 forwarding for Kubernetes networking
+#     ansible.builtin.command: multipass exec {{ item.key }} -- sudo sysctl -w net.ipv4.ip_forward=1
+#     changed_when: false
+#     loop: "{{ vms | dict2items }}"
+
+#   - name: Persist sysctl setting across reboots
+#     ansible.builtin.command: multipass exec {{ item.key }} -- sudo bash -c 'echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-kubernetes-cri.conf'
+#     changed_when: false
+#     loop: "{{ vms | dict2items }}"
+
+#   - name: Enable and start required services
+#     ansible.builtin.command: multipass exec {{ item.key }} -- sudo systemctl enable --now {{ item.service }}
+#     loop:
+#       - { key: "master01", service: "kubelet" }
+#       - { key: "worker01", service: "kubelet" }
+#       - { key: "worker02", service: "kubelet" }
+#       - { key: "worker03", service: "kubelet" }
+#       - { key: "master01", service: "containerd" }
+#       - { key: "worker01", service: "containerd" }
+#       - { key: "worker02", service: "containerd" }
+#       - { key: "worker03", service: "containerd" }
+#     changed_when: false
+
+    - name: Enable and start required services
+      ansible.builtin.command: >
+        multipass exec {{ item.node }} -- bash -c '
+        if ! systemctl is-enabled {{ item.service }} >/dev/null 2>&1; then
+          sudo systemctl enable {{ item.service }};
+        fi;
+        if ! systemctl is-active {{ item.service }} >/dev/null 2>&1; then
+          sudo systemctl start {{ item.service }};
+        fi'
+      loop: "{{ services_to_enable }}"
+      changed_when: false
+
+    - name: Check if Kubernetes cluster is already initialized
+      ansible.builtin.command: multipass exec master01 -- test -f /etc/kubernetes/admin.conf
+      register: cluster_initialized
+      changed_when: false
+      failed_when: false  # Prevents failure if the file does not exist
+      when: "'master01' in vms"
+
+    - name: Ensure kubectl can communicate with the API server
+      ansible.builtin.command: multipass exec master01 -- kubectl get nodes --kubeconfig /etc/kubernetes/admin.conf
+      register: cluster_status
+      changed_when: false
+      failed_when: false
+      when: "'master01' in vms and cluster_initialized.rc == 0"
+
+    - name: Initialize Kubernetes control plane on master01 (Only if not initialized)
+      ansible.builtin.command: multipass exec master01 -- sudo kubeadm init --pod-network-cidr=10.244.0.0/16
+      register: kubeadm_init
+      when: "'master01' in vms and cluster_initialized.rc != 0"
+      changed_when: "'To start using your cluster' in kubeadm_init.stdout"
+
+    - name: Ensure .kube directory exists
+      ansible.builtin.command: multipass exec master01 -- mkdir -p /home/ubuntu/.kube
+      changed_when: false
+      when: kubeadm_init is succeeded
+
+    - name: Copy Kubernetes admin.conf for kubectl
+      ansible.builtin.command: multipass exec master01 -- sudo cp -f /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+      changed_when: false
+      when: kubeadm_init is succeeded
+
+    - name: Set correct permissions on kubectl config
+      ansible.builtin.command: multipass exec master01 -- sudo chown ubuntu:ubuntu /home/ubuntu/.kube/config
+      changed_when: false
+      when: kubeadm_init is succeeded
+
+#    - name: Reset Kubernetes if previous setup is incomplete (Optional)
+#      ansible.builtin.command: multipass exec master01 -- sudo kubeadm reset -f
+#      when: "'master01' in vms and cluster_initialized.rc == 0 and cluster_status.rc != 0"
+#      changed_when: true
+#
+#    - name: Re-initialize Kubernetes after reset (Only if needed)
+#      ansible.builtin.command: multipass exec master01 -- sudo kubeadm init --pod-network-cidr=10.244.0.0/16
+#      register: kubeadm_reinit
+#      when: "'master01' in vms and cluster_initialized.rc == 0 and cluster_status.rc != 0"
+#      changed_when: "'To start using your cluster' in kubeadm_reinit.stdout"
+
+    - name: Generate new join command if cluster is already initialized
+      ansible.builtin.command: multipass exec master01 -- sudo kubeadm token create --print-join-command
+      register: kubeadm_join_out
+      when: "'master01' in vms"
+      changed_when: false
+
+    - name: Extract join command from kubeadm init output
+      ansible.builtin.set_fact:
+        kubeadm_join_command: "{{ kubeadm_join_out.stdout | regex_search('kubeadm join .*', multiline=True) | default('') | trim }}"
+      when: "'master01' in vms"
+      #when: "'master01' in vms and cluster_initialized.rc != 0"
+
+    - name: Validate extracted join command
+      ansible.builtin.debug:
+        msg: "Extracted Join Command: {{ kubeadm_join_command }}"
+      when: kubeadm_join_command | length > 0
+
+    - name: Get list of already joined worker nodes
+      ansible.builtin.command: multipass exec master01 -- kubectl get nodes -o jsonpath='{.items[*].metadata.name}'
+      register: existing_nodes
+      changed_when: false
+      ignore_errors: true
+      when: "'master01' in vms"
+
+    - name: Compute list of workers that need to join
+      ansible.builtin.set_fact:
+        workers_to_join: "{{ vms.keys() | select('match', 'worker.*') | list | difference(existing_nodes.stdout.split()) }}"
+      when: "'master01' in vms"
+
+    - name: Join worker nodes to the cluster (Only if not already joined)
+      ansible.builtin.command:
+        cmd: multipass exec {{ item }} -- sudo bash -c "export PATH=$PATH:/usr/local/bin && {{ kubeadm_join_command }}"
+      loop: "{{ workers_to_join }}"
+      when: workers_to_join | length > 0 and kubeadm_join_command | length > 0
+      changed_when: false
+
+    - name: Wait for Kubernetes API server pod to be online
+      shell: |
+        multipass exec master01 -- bash -c 'sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf -n kube-system get pods -l component=kube-apiserver -o jsonpath="{.items[0].status.phase}" || true'
+      register: is_apiserver_up
+      until: is_apiserver_up.stdout == "Running"
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Check if Calico is already installed
+      block:
+        - name: Check if Tigera Operator is running
+          ansible.builtin.command:
+            cmd: multipass exec master01 -- kubectl get deployment -n tigera-operator tigera-operator
+          register: tigera_operator_status
+          changed_when: false
+          failed_when: tigera_operator_status.rc > 1  # Ignore errors if not installed
+
+        - name: Check if Calico System components are running
+          ansible.builtin.command:
+            cmd: multipass exec master01 -- kubectl get deployment -n calico-system calico-kube-controllers
+          register: calico_controller_status
+          changed_when: false
+          failed_when: calico_controller_status.rc > 1  # Ignore errors if not installed
+
+        - name: Check if Calico Node DaemonSet is running
+          ansible.builtin.command:
+            cmd: multipass exec master01 -- kubectl get ds -n calico-system calico-node
+          register: calico_node_status
+          changed_when: false
+          failed_when: calico_node_status.rc > 1  # Ignore errors if not installed
+
+      always:
+        - name: Print Calico installation status
+          ansible.builtin.debug:
+            msg: 
+              - "Tigera Operator Installed: {{ 'Yes' if tigera_operator_status.rc == 0 else 'No' }}"
+              - "Calico Kube Controllers Installed: {{ 'Yes' if calico_controller_status.rc == 0 else 'No' }}"
+              - "Calico Node DaemonSet Installed: {{ 'Yes' if calico_node_status.rc == 0 else 'No' }}"
+
+    - name: Install Calico on master01 (Only if not installed)
+      block:
+        - name: Ensure Calico directory exists
+          ansible.builtin.command:
+            cmd: multipass exec master01 -- mkdir -p /home/ubuntu/calico
+          changed_when: false
+
+        - name: Copy Calico custom resources YAML to master01
+          ansible.builtin.copy:
+            content: |
+              apiVersion: operator.tigera.io/v1
+              kind: Installation
+              metadata:
+                name: default
+              spec:
+                calicoNetwork:
+                  ipPools:
+                  - name: default-ipv4-ippool
+                    blockSize: 26
+                    cidr: 10.244.0.0/16
+                    encapsulation: VXLANCrossSubnet
+                    natOutgoing: Enabled
+                    nodeSelector: all()
+            dest: /tmp/custom-resources.yaml
+            mode: '0644'
+
+        - name: Move YAML file to master01 via Multipass
+          ansible.builtin.command:
+            cmd: multipass transfer /tmp/custom-resources.yaml master01:/home/ubuntu/calico/custom-resources.yaml
+          changed_when: false
+
+        - name: Apply Calico operator manifest
+          ansible.builtin.command:
+            cmd: multipass exec master01 -- kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.2/manifests/tigera-operator.yaml
+          changed_when: false
+
+        - name: Apply Calico custom resources
+          ansible.builtin.command:
+            cmd: multipass exec master01 -- kubectl create -f /home/ubuntu/calico/custom-resources.yaml
+          changed_when: false
+
+      when: tigera_operator_status.rc != 0 or calico_controller_status.rc != 0 or calico_node_status.rc != 0  # Install only if any component is missing
+

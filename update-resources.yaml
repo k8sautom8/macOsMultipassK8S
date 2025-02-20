@@ -1,0 +1,47 @@
+- name: Update Multipass VM configurations
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vms:
+      master01:
+        memory: 2G
+        cpu: 2
+        disk: 12G
+      worker01:
+        memory: 2G
+        cpu: 2
+        disk: 12G
+      worker02:
+        memory: 2G
+        cpu: 2
+        disk: 12G
+      worker03:
+        memory: 2G
+        cpu: 2
+        disk: 12G
+
+  tasks:
+    - name: Stop VMs before updating configurations
+      ansible.builtin.command: multipass stop {{ item.key }}
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
+
+    - name: Update VM memory
+      ansible.builtin.command: multipass set local.{{ item.key }}.memory={{ item.value.memory }}
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
+
+    - name: Update VM CPU
+      ansible.builtin.command: multipass set local.{{ item.key }}.cpus={{ item.value.cpu }}
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
+
+    - name: Update VM disk
+      ansible.builtin.command: multipass set local.{{ item.key }}.disk={{ item.value.disk }}
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
+
+    - name: Start VMs after updating configurations
+      ansible.builtin.command: multipass start {{ item.key }}
+      loop: "{{ vms | dict2items }}"
+      changed_when: false
