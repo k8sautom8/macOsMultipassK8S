@@ -1,3 +1,10 @@
+# ------------------------------------------------------------------------------
+# Playbook: update-reources.yaml
+# Author: Abhijit Jadhav, 19-Feb-2025
+# Description: This playbook is to modify resources on Multipass VMs
+# Note: Disk can be only expanded and can not be shrinked
+# ------------------------------------------------------------------------------
+
 - name: Update Multipass VM configurations
   hosts: localhost
   gather_facts: no
