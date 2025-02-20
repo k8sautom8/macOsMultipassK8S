@@ -32,8 +32,9 @@
         disk: 12G
         network: en1
 
-    # Define the Kubernetes version to be installed
+    # Define the Kubernetes & Clico version to be installed
     k8s_version: "v1.32"
+    calico_version: "v3.29.2"
 
     # Define the list of services to enable and start for each VM
     services_to_enable:
@@ -372,7 +373,7 @@
 
         - name: Apply Calico operator manifest
           ansible.builtin.command:
-            cmd: multipass exec master01 -- kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.2/manifests/tigera-operator.yaml
+            cmd: multipass exec master01 -- kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
           changed_when: false
 
         - name: Apply Calico custom resources
