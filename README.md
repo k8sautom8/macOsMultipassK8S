@@ -6,6 +6,7 @@
 # 🚀 macOS Multipass Kubernetes Setup  
 
 An **Ansible playbook** to set up a **Kubernetes cluster on macOS** using **Multipass** for VM management. Ideal for **Mac Mini M4** or any macOS system!  
+**Playbook is Idempotent means you can run as many times as you can withou affecting the setup**
 
 ## 📌 Prerequisites  
 
@@ -102,7 +103,11 @@ brew update && brew reinstall ansible
 ```sh
 kubectl get pods -A
 ```
-
+🔹 **Clean-Up:**  
+```sh
+multipass delete -all  # This will delete all VMs
+multipass purge # This will purge all deleted VMs, if you do not purge the VMs can be recovered using 'recover' command
+```
 ---
 
 ## 📌 Contributing  
