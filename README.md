@@ -60,7 +60,7 @@ en7    ethernet   Ethernet Adapter (en7)
 ```
 
 This will automatically:  
-✅ Create and configure **Multipass VMs** (Master + Workers)  
+✅ Create and configure **Multipass VMs** (1 Master/Control Plane VM and 3 Worker Node VMs)  
 ✅ Install **Kubernetes** (Kubeadm, Kubelet, Kubectl)  
 ✅ Configure **networking** and **Calico CNI**  
 ✅ Set up **kubectl** access on the master node  
