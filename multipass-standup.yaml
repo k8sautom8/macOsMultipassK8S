@@ -1,4 +1,10 @@
----
+# ------------------------------------------------------------------------------
+# Playbook: multipass-k8s-setup.yaml
+# Author: Abhijit Jadhav, 19-Feb-2025
+# Description: This playbook sets up a Kubernetes cluster on Mac OS 
+# using Multipass to provision Virtual Machines, VMs
+# ------------------------------------------------------------------------------
+
 - name: Set up Kubernetes cluster using Multipass VMs
   hosts: localhost
   gather_facts: no
