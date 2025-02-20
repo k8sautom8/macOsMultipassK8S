@@ -32,9 +32,8 @@
         disk: 12G
         network: en1
 
-    # Define the Kubernetes & Clico version to be installed
+    # Define the Kubernetes version to be installed
     k8s_version: "v1.32"
-    calico_version: "v3.29.2"
 
     # Define the list of services to enable and start for each VM
     services_to_enable:
@@ -139,6 +138,33 @@
       changed_when: false
       loop: "{{ vms | dict2items }}"
 
+    - name: Check if /etc/crictl.yaml exists on master01
+      ansible.builtin.command:
+        cmd: multipass exec master01 -- test -s /etc/crictl.yaml
+      register: crictl_check
+      changed_when: false
+      failed_when: false  # Prevents failure if the file does not exist
+
+    - name: Create temporary crictl.yaml on localhost
+      ansible.builtin.copy:
+        dest: "/tmp/crictl.yaml"
+        content: |
+          runtime-endpoint: unix:///run/containerd/containerd.sock
+          image-endpoint: unix:///run/containerd/containerd.sock
+          timeout: 10
+          debug: false
+      when: crictl_check.rc != 0
+
+    - name: Copy crictl.yaml to master01
+      ansible.builtin.command:
+        cmd: multipass transfer /tmp/crictl.yaml master01:/tmp/crictl.yaml
+      when: crictl_check.rc != 0
+
+    - name: Move crictl.yaml to /etc/crictl.yaml on master01
+      ansible.builtin.command:
+        cmd: multipass exec master01 -- sudo mv /tmp/crictl.yaml /etc/crictl.yaml
+      when: crictl_check.rc != 0
+
     - name: Ensure required kernel modules are loaded
       ansible.builtin.command: multipass exec {{ item.0.key }} -- sudo modprobe {{ item.1 }}
       loop: "{{ vms | dict2items | product(['overlay', 'br_netfilter']) | list }}"
@@ -182,29 +208,6 @@
       ansible.builtin.command: multipass exec {{ item.key }} -- sudo systemctl restart containerd.service
       loop: "{{ vms | dict2items }}"
       changed_when: false
-
-#   - name: Enable IPv4 forwarding for Kubernetes networking
-#     ansible.builtin.command: multipass exec {{ item.key }} -- sudo sysctl -w net.ipv4.ip_forward=1
-#     changed_when: false
-#     loop: "{{ vms | dict2items }}"
-
-#   - name: Persist sysctl setting across reboots
-#     ansible.builtin.command: multipass exec {{ item.key }} -- sudo bash -c 'echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-kubernetes-cri.conf'
-#     changed_when: false
-#     loop: "{{ vms | dict2items }}"
-
-#   - name: Enable and start required services
-#     ansible.builtin.command: multipass exec {{ item.key }} -- sudo systemctl enable --now {{ item.service }}
-#     loop:
-#       - { key: "master01", service: "kubelet" }
-#       - { key: "worker01", service: "kubelet" }
-#       - { key: "worker02", service: "kubelet" }
-#       - { key: "worker03", service: "kubelet" }
-#       - { key: "master01", service: "containerd" }
-#       - { key: "worker01", service: "containerd" }
-#       - { key: "worker02", service: "containerd" }
-#       - { key: "worker03", service: "containerd" }
-#     changed_when: false
 
     - name: Enable and start required services
       ansible.builtin.command: >
@@ -373,7 +376,7 @@
 
         - name: Apply Calico operator manifest
           ansible.builtin.command:
-            cmd: multipass exec master01 -- kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
+            cmd: multipass exec master01 -- kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.2/manifests/tigera-operator.yaml
           changed_when: false
 
         - name: Apply Calico custom resources
@@ -382,4 +385,3 @@
           changed_when: false
 
       when: tigera_operator_status.rc != 0 or calico_controller_status.rc != 0 or calico_node_status.rc != 0  # Install only if any component is missing
-
