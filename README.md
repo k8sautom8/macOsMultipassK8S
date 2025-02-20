@@ -38,7 +38,13 @@ brew install ansible
 
 Once all prerequisites are installed, clone this repository and run the playbook:  
 
-Please edit the network: en1 and replace with you own interface name, en1=wifi in my case see below,
+
+```sh
+git clone https://github.com/k8sautom8/macOsMultipassK8S.git
+cd macOsMultipassK8S
+```
+
+**Please edit playbook vars section -> network: en1 and replace with you own interface name, en1=wifi in my case see below,**
 
 ```% multipass networks
 Name   Type       Description
@@ -48,11 +54,8 @@ en5    ethernet   Ethernet Adapter (en5)
 en6    ethernet   Ethernet Adapter (en6)
 en7    ethernet   Ethernet Adapter (en7)
 ```
-
-
-```sh
-git clone https://github.com/k8sautom8/macOsMultipassK8S.git
-cd macOsMultipassK8S
+**Execute Playbook**
+```
 /opt/homebrew/bin/ansible-playbook multipass-standup.yaml
 ```
 
