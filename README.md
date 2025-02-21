@@ -27,7 +27,7 @@ Homebrew is the missing package manager for macOS.
 🔗 [Homebrew Website](https://brew.sh/)  
 
 ### 3️⃣ Install **Ansible**  
-Once Homebrew is installed, install Ansible with:  
+🔹 Once Homebrew is installed, install Ansible with:  
 ```sh
 brew update  
 brew install ansible  
@@ -37,7 +37,7 @@ brew install ansible
 
 ## 🚀 How to Run the Playbook  
 
-Once all prerequisites are installed, clone this repository and run the playbook:  
+🔹 **Once all prerequisites are installed, clone this repository and run the playbook:**
 
 
 ```sh
@@ -45,7 +45,7 @@ git clone https://github.com/k8sautom8/macOsMultipassK8S.git
 cd macOsMultipassK8S
 ```
 
-**Please edit playbook vars section -> network: en1 and replace with you own interface name, en1=wifi in my case see below,**
+🔹 **Please edit playbook vars section -> network: en1 and replace with you own interface name, en1=wifi in my case see below,**
 
 ```
 % multipass networks
@@ -56,7 +56,7 @@ en5    ethernet   Ethernet Adapter (en5)
 en6    ethernet   Ethernet Adapter (en6)
 en7    ethernet   Ethernet Adapter (en7)
 ```
-**Execute Playbook**
+🔹 **Execute the Playbook**
 ```
 /opt/homebrew/bin/ansible-playbook multipass-standup.yaml
 ```
