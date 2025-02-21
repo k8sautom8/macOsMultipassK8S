@@ -66,7 +66,7 @@
       when: "item.key not in (vm_list.stdout | from_json | json_query('list[*].name'))"
       loop: "{{ vms | dict2items }}"
 
-    - name: Ensure DNS is configured correctly inside VMs
+    - name: Ensure DNS is configured correctly inside VMs (Optional and you may want to remove this task. I have complete lockdown in my lab hence I configure google nameserver)
       ansible.builtin.command: >
         multipass exec {{ item.key }} -- bash -c 'grep -qxF "nameserver 8.8.8.8" /etc/resolv.conf || echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf'
       changed_when: false
