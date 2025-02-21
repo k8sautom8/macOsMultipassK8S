@@ -47,7 +47,8 @@ cd macOsMultipassK8S
 
 **Please edit playbook vars section -> network: en1 and replace with you own interface name, en1=wifi in my case see below,**
 
-```% multipass networks
+```
+% multipass networks
 Name   Type       Description
 en0    ethernet   Ethernet
 en1    wifi       Wi-Fi
